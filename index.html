@@ -63,11 +63,23 @@ details ul{margin:8px 0 0;padding-left:20px;color:var(--mute)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:99px;font-size:14px;z-index:50}
 footer{margin-top:28px;font-size:13px;color:var(--mute);text-align:center}
 @media(max-width:480px){.hero h1{font-size:25px}.f2{grid-template-columns:1fr}}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{flex:1;background:var(--chip);border:0;border-radius:14px;padding:11px;font-weight:700;cursor:pointer;font-size:16px}
+.tab.on{background:var(--brand);color:var(--on)}
+.badge{display:inline-block;background:var(--card);color:var(--ink);border-radius:99px;padding:0 8px;font-size:13px;margin-left:4px}
+.badge.red{background:var(--bad);color:#fff}
+.notes{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.note{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;background:var(--card);border:1px solid var(--line);border-left:6px solid var(--warn);border-radius:16px;padding:12px}
+.note.p1{border-left-color:var(--bad)}.note.p3{border-left-color:var(--moss)}
+.note input[type=checkbox]{width:22px;height:22px;margin-top:2px;accent-color:var(--moss)}
+.nt{white-space:pre-wrap;overflow-wrap:anywhere}
+.chip.lnk{border:0;color:var(--ink);cursor:pointer;font-family:inherit}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header class="hero"><div class="logo">🦔</div><div><h1>Igel-Tagebuch</h1><p>Findlinge, Gewicht &amp; Pflege auf einen Blick</p></div></header>
+  <nav id="tabs" class="tabs"></nav>
   <main id="app"><div class="card empty mute">Lade dein Tagebuch …</div></main>
   <details class="card"><summary>🌰 Gut zu wissen</summary>
     <ul>
@@ -109,7 +121,7 @@ const H={apikey:KEY,"Content-Type":"application/json"};
 let pending=0;
 function localSave(){try{localStorage.setItem(LS,JSON.stringify(igels))}catch(e){}}
 function localLoad(){try{return JSON.parse(localStorage.getItem(LS)||"[]")}catch(e){return[]}}
-async function api(path,opt){const r=await fetch(SB+path,Object.assign({headers:H},opt||{}));if(!r.ok)throw new Error(r.status);const t=await r.text();return t?JSON.parse(t):null}
+async function api(path,opt,base){const r=await fetch((base||SB)+path,Object.assign({headers:H},opt||{}));if(!r.ok)throw new Error(r.status);const t=await r.text();return t?JSON.parse(t):null}
 function track(p,msg){pending++;return p.catch(()=>toast(msg)).finally(()=>pending--)}
 function save(i){const k=igels.findIndex(x=>x.id===i.id);k<0?igels.push(i):igels[k]=i;render();localSave();
   track(api("",{method:"POST",headers:Object.assign({},H,{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify({id:i.id,data:i,updated_at:new Date().toISOString()})}),"Speichern fehlgeschlagen – bitte Internet prüfen")}
@@ -122,11 +134,65 @@ async function pull(force){if(pending&&!force)return;
     if(ser(n)===ser(igels)&&!force)return;
     const el=document.activeElement;if(!force&&el&&/INPUT|TEXTAREA|SELECT/.test(el.tagName)&&$("#app").contains(el))return;
     igels=n;localSave();render()}catch(e){setFoot(false);if(force)render()}}
-function init(){igels=localLoad();render();pull(true);setInterval(()=>pull(),15000);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)pull()})}
+function init(){igels=localLoad();render();pull(true);pullNotes(true);setInterval(()=>{pull();pullNotes();dueCheck()},15000);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden){pull();pullNotes()}})}
 
+let notes=[],tab="igel",nick="",noteErr=false;
+try{nick=localStorage.getItem("igel-nick")||""}catch(e){}
+const SBN=SB.replace("/igel","/notizen");
+const PR={1:"🔴 Wichtig",2:"🟡 Normal",3:"🟢 Hat Zeit"};
+const ft=s=>new Date(s).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+const isDue=n=>!n.done&&n.due&&new Date(n.due)<=new Date();
+function noteSave(n){const k=notes.findIndex(x=>x.id===n.id);k<0?notes.push(n):notes[k]=n;render();
+  track(api("",{method:"POST",headers:Object.assign({},H,{Prefer:"resolution=merge-duplicates,return=minimal"}),body:JSON.stringify({id:n.id,data:n,updated_at:new Date().toISOString()})},SBN),"Speichern fehlgeschlagen – gibt es die Tabelle „notizen“?")}
+function noteDel(id){notes=notes.filter(x=>x.id!==id);render();track(api("?id=eq."+encodeURIComponent(id),{method:"DELETE"},SBN),"Löschen fehlgeschlagen")}
+async function pullNotes(force){if(pending&&!force)return;
+  try{const rows=await api("?select=data&order=updated_at.desc",null,SBN);const n=rows.map(r=>r.data);const was=noteErr;noteErr=false;
+    if(ser(n)===ser(notes)&&!force){if(was&&tab==="pin")render();return}
+    const el=document.activeElement;if(!force&&el&&/INPUT|TEXTAREA|SELECT/.test(el.tagName)&&$("#app").contains(el))return;
+    notes=n;render()}catch(e){if(!noteErr){noteErr=true;if(tab==="pin")render()}}}
+function dueCheck(){let seen=[];try{seen=JSON.parse(localStorage.getItem("igel-seen")||"[]")}catch(e){}
+  notes.forEach(n=>{if(isDue(n)&&!seen.includes(n.id)){seen.push(n.id);toast("⏰ "+n.text.slice(0,60));
+    try{if(window.Notification&&Notification.permission==="granted")new Notification("Igel-Tagebuch: Erinnerung",{body:n.text})}catch(e){}}});
+  try{localStorage.setItem("igel-seen",JSON.stringify(seen.slice(-200)))}catch(e){}renderTabs()}
+function renderTabs(){const open=notes.filter(n=>!n.done),due=open.filter(isDue).length;
+  $("#tabs").innerHTML=`<button class="tab ${tab==="igel"?"on":""}" data-t="igel">🦔 Igel</button><button class="tab ${tab==="pin"?"on":""}" data-t="pin">📌 Pinnwand${open.length?` <span class="badge ${due?"red":""}">${open.length}</span>`:""}</button>`;
+  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{tab=b.dataset.t;cur=null;render();scrollTo(0,0)})}
+function pin(){
+  const open=notes.filter(n=>!n.done).sort((a,b)=>(isDue(a)?0:1)-(isDue(b)?0:1)||a.prio-b.prio||(a.due||"9").localeCompare(b.due||"9")||b.created.localeCompare(a.created));
+  const done=notes.filter(n=>n.done).sort((a,b)=>(b.doneAt||"").localeCompare(a.doneAt||"")).slice(0,30);
+  const item=n=>{const ig=igels.find(x=>x.id===n.igel);
+    return `<li class="note p${n.prio}"><input type="checkbox" data-nd="${n.id}" ${n.done?"checked":""} title="Erledigt"><div style="min-width:0"><div class="mute"><b>${esc(n.nick)}</b> · ${ft(n.created)}</div><div class="nt">${esc(n.text)}</div>
+      <div style="margin-top:6px"><span class="chip ${n.prio===1?"bad":n.prio===3?"ok":""}">${PR[n.prio]}</span>
+      ${n.due?`<span class="chip ${isDue(n)?"bad":""}">⏰ ${ft(n.due)}</span>`:""}
+      ${n.igel&&ig?`<button class="chip lnk" data-ig="${n.igel}">🦔 ${esc(ig.name)}</button>`:n.igelName?`<span class="chip">🦔 ${esc(n.igelName)}</span>`:""}
+      ${n.done?`<span class="mute"> ✓ erledigt von ${esc(n.doneBy||"?")}</span>`:""}</div></div><button class="x" data-nx="${n.id}" title="Löschen">✕</button></li>`};
+  const canNotif=window.Notification&&Notification.permission==="default";
+  return `<div class="bar"><div><h2>Pinnwand</h2><span class="mute">Nachrichten &amp; Aufgaben für euch beide</span></div></div>
+  ${noteErr?`<div class="alert">⚠️ Die Pinnwand kann gerade nicht laden. Wurde die Tabelle „notizen“ in Supabase angelegt?</div>`:""}
+  <div class="card"><form id="nf2"><div class="f2"><div><label>Dein Name</label><input name="nick" required maxlength="20" value="${esc(nick)}" placeholder="z. B. Papa"></div>
+    <div><label>Wichtigkeit</label><select name="prio"><option value="1">🔴 Wichtig</option><option value="2" selected>🟡 Normal</option><option value="3">🟢 Hat Zeit</option></select></div></div>
+    <label>Nachricht</label><textarea name="text" rows="2" required maxlength="400" placeholder="z. B. Stachelino braucht heute Abend Futter und frisches Wasser"></textarea>
+    <div class="f2"><div><label>Erinnerung (optional)</label><input type="datetime-local" name="due"></div>
+    <div><label>Zu Igel (optional)</label><select name="igel"><option value="">– kein Igel –</option>${igels.map(i=>`<option value="${i.id}">${esc(i.name)}</option>`).join("")}</select></div></div>
+    <button class="btn" style="margin-top:14px;width:100%">Auf die Pinnwand</button></form>
+    ${canNotif?`<button type="button" class="btn ghost sm" id="notif" style="margin-top:10px">🔔 Erinnerungen als Benachrichtigung erlauben</button>`:""}
+    <p class="mute" style="margin:10px 0 0;font-size:13px">Erinnerungen erscheinen, solange die Seite geöffnet ist. Wenn die Seite zu ist, kommt keine Benachrichtigung.</p></div>
+  <h3 style="margin:18px 0 8px">Offen (${open.length})</h3>
+  ${open.length?`<ul class="notes">${open.map(item).join("")}</ul>`:`<div class="card mute" style="text-align:center">Nichts offen – alles erledigt 🎉</div>`}
+  ${done.length?`<details><summary>Erledigt (${done.length})</summary><ul class="notes" style="margin-top:10px">${done.map(item).join("")}</ul></details>`:""}`}
+function bindPin(){
+  const f=$("#nf2");if(f)f.onsubmit=e=>{e.preventDefault();const d=new FormData(f);nick=d.get("nick").trim();try{localStorage.setItem("igel-nick",nick)}catch(x){}
+    const ig=d.get("igel");noteSave({id:uid(),text:d.get("text").trim(),nick,prio:+d.get("prio"),due:d.get("due")||"",igel:ig,igelName:ig?((igels.find(x=>x.id===ig)||{}).name||""):"",created:new Date().toISOString(),done:false});toast("Gepostet ✓")};
+  document.querySelectorAll("[data-nd]").forEach(c=>c.onchange=()=>{const n=notes.find(x=>x.id===c.dataset.nd);if(!n)return;n.done=c.checked;n.doneBy=nick||"";n.doneAt=new Date().toISOString();noteSave(n)});
+  document.querySelectorAll("[data-nx]").forEach(b=>b.onclick=()=>{if(confirm("Nachricht löschen?"))noteDel(b.dataset.nx)});
+  document.querySelectorAll("[data-ig]").forEach(b=>b.onclick=()=>{tab="igel";cur=b.dataset.ig;render();scrollTo(0,0)});
+  const nb=$("#notif");if(nb)nb.onclick=()=>Notification.requestPermission().then(()=>render());
+}
 function render(){
+  renderTabs();
   const a=$("#app");
+  if(tab==="pin"){a.innerHTML=pin();bindPin();return}
   const i=igels.find(x=>x.id===cur);
   if(cur&&!i)cur=null;
   a.innerHTML=i?detail(i):list();
